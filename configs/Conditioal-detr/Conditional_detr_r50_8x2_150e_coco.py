@@ -14,7 +14,7 @@ model = dict(
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     bbox_head=dict(
-        type='DETRHead',
+        type='ConditionalDETRHead',
         num_classes=80,
         in_channels=2048,
         transformer=dict(
@@ -132,7 +132,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=1,
     workers_per_gpu=2,
     train=dict(pipeline=train_pipeline),
     val=dict(pipeline=test_pipeline),
