@@ -446,6 +446,7 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
                  *args,
                  post_norm_cfg=dict(type='LN'),
                  return_intermediate=False,
+                 d_model=256,
                  **kwargs):
 
         super(CDetrTransformerDecoder, self).__init__(*args, **kwargs)
@@ -455,6 +456,7 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
                                               self.embed_dims)[1]
         else:
             self.post_norm = None
+        self.query_scale = MLP(d_model, d_model, d_model, 2)
 
     def forward(self, query, *args, **kwargs):
         """Forward function for `TransformerDecoder`.

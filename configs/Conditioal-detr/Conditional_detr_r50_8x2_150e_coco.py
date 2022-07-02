@@ -39,6 +39,7 @@ model = dict(
                 type='CDetrTransformerDecoder',
                 return_intermediate=True,
                 num_layers=6,
+                d_model=256,
                 transformerlayers=dict(
                     type='CDetrTransformerDecoderLayer',
                     attn_cfgs=dict(
