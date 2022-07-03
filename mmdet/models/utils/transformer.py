@@ -457,6 +457,9 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
         else:
             self.post_norm = None
         self.query_scale = MLP(d_model, d_model, d_model, 2)
+        self.ref_point_head = MLP(d_model, d_model, 2, 2)
+        for layer_id in range(kwargs['num_layers'] - 1):
+            self.layers[layer_id + 1].ca_qpos_proj = None
 
     def forward(self, query, *args, **kwargs):
         """Forward function for `TransformerDecoder`.
@@ -470,6 +473,9 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
                 return_intermediate is `False`, otherwise it has shape
                 [num_layers, num_query, bs, embed_dims].
         """
+        reference_points_before_sigmoid = self.ref_point_head(kwargs['query_pos'])  # [num_queries, batch_size, 2]
+        reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+
         if not self.return_intermediate:
             x = super().forward(query, *args, **kwargs)
             if self.post_norm:
@@ -477,8 +483,18 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
             return x
 
         intermediate = []
-        for layer in self.layers:
-            query = layer(query, *args, **kwargs)
+        for layer_id,layer in enumerate(self.layers):
+            obj_center = reference_points[..., :2].transpose(0, 1)
+            if layer_id == 0:
+                pos_transformation = 1
+            else:
+                pos_transformation = self.query_scale(query)
+            # get sine embedding for the query vector
+            query_sine_embed = gen_sineembed_for_position(obj_center)
+            # apply transformation
+            query_sine_embed = query_sine_embed * pos_transformation
+
+            query = layer(query, query_sine_embed,is_first=(layer_id == 0), *args, **kwargs)
             if self.return_intermediate:
                 if self.post_norm is not None:
                     intermediate.append(self.post_norm(query))
@@ -530,6 +546,28 @@ class CDetrTransformerDecoderLayer(BaseTransformerLayer):
         assert len(operation_order) == 6
         assert set(operation_order) == set(
             ['self_attn', 'norm', 'cross_attn', 'ffn'])
+    def forward(self,
+                query,
+                key=None,
+                value=None,
+                query_pos=None,
+                key_pos=None,
+                attn_masks=None,
+                query_key_padding_mask=None,
+                key_padding_mask=None,
+                query_sine_embed,
+                is_first,
+                **kwargs):
+        super(CDetrTransformerDecoderLayer, self).forward(self,
+                query,
+                key=None,
+                value=None,
+                query_pos=None,
+                key_pos=None,
+                attn_masks=None,
+                query_key_padding_mask=None,
+                key_padding_mask=None,
+                **kwargs)
 
 
 @TRANSFORMER_LAYER.register_module()
