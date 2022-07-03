@@ -546,28 +546,8 @@ class CDetrTransformerDecoderLayer(BaseTransformerLayer):
         assert len(operation_order) == 6
         assert set(operation_order) == set(
             ['self_attn', 'norm', 'cross_attn', 'ffn'])
-    def forward(self,
-                query,
-                key=None,
-                value=None,
-                query_pos=None,
-                key_pos=None,
-                attn_masks=None,
-                query_key_padding_mask=None,
-                key_padding_mask=None,
-                query_sine_embed,
-                is_first,
-                **kwargs):
-        super(CDetrTransformerDecoderLayer, self).forward(self,
-                query,
-                key=None,
-                value=None,
-                query_pos=None,
-                key_pos=None,
-                attn_masks=None,
-                query_key_padding_mask=None,
-                key_padding_mask=None,
-                **kwargs)
+    def forward(self,query, query_sine_embed,is_first, *args, **kwargs):
+        super(CDetrTransformerDecoderLayer, self).forward(self,query,*args, **kwargs)
 
 
 @TRANSFORMER_LAYER.register_module()
