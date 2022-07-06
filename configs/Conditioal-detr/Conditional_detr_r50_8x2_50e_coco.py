@@ -147,7 +147,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=1,
+    samples_per_gpu=2,
     workers_per_gpu=2,
     train=dict(pipeline=train_pipeline),
     val=dict(pipeline=test_pipeline),
@@ -155,11 +155,12 @@ data = dict(
 # optimizer
 optimizer = dict(
     type='AdamW',
-    lr=0.0001,
+    lr=0.0002,
     weight_decay=0.0001,
     paramwise_cfg=dict(
         custom_keys={'backbone': dict(lr_mult=0.1, decay_mult=1.0)}))
 optimizer_config = dict(grad_clip=dict(max_norm=0.1, norm_type=2))
 # learning policy
-lr_config = dict(policy='step', step=[100])
-runner = dict(type='EpochBasedRunner', max_epochs=150)
+lr_config = dict(policy='step', step=[40])
+runner = dict(type='EpochBasedRunner', max_epochs=50)
+auto_scale_lr = dict(base_batch_size=32)

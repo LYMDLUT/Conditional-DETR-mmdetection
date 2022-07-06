@@ -12,12 +12,7 @@ from mmdet.core import (bbox_cxcywh_to_xyxy, bbox_xyxy_to_cxcywh,
 from mmdet.models.utils import build_transformer
 from ..builder import HEADS, build_loss
 from .anchor_free_head import AnchorFreeHead
-
-def inverse_sigmoid(x, eps=1e-5):
-    x = x.clamp(min=0, max=1)
-    x1 = x.clamp(min=eps)
-    x2 = (1 - x).clamp(min=eps)
-    return torch.log(x1/x2)
+from mmdet.models.utils.transformer import inverse_sigmoid
 
 @HEADS.register_module()
 class ConditionalDETRHead(AnchorFreeHead):
@@ -261,12 +256,20 @@ class ConditionalDETRHead(AnchorFreeHead):
         # position encoding
         pos_embed = self.positional_encoding(masks)  # [bs, embed_dim, h, w]
         # outs_dec: [nb_dec, bs, num_query, embed_dim]
-        outs_dec, _, reference_points = self.transformer(x, masks, self.query_embedding.weight,
+        outs_dec, _, reference = self.transformer(x, masks, self.query_embedding.weight,
                                        pos_embed)
-
+        ##################
+        reference_before_sigmoid = inverse_sigmoid(reference)
+        outputs_coords = []
+        for lvl in range(outs_dec.shape[0]):
+            tmp = self.fc_reg(self.activate(self.reg_ffn(outs_dec[lvl])))
+            tmp[..., :2] += reference_before_sigmoid
+            outputs_coord = tmp.sigmoid()
+            outputs_coords.append(outputs_coord)
+        outputs_coord = torch.stack(outputs_coords)
+        ########################
         all_cls_scores = self.fc_cls(outs_dec)
-        all_bbox_preds = self.fc_reg(self.activate(
-            self.reg_ffn(outs_dec))).sigmoid()
+        all_bbox_preds = outputs_coord
         return all_cls_scores, all_bbox_preds
 
     @force_fp32(apply_to=('all_cls_scores_list', 'all_bbox_preds_list'))
