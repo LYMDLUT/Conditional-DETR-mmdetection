@@ -13,6 +13,11 @@ from mmdet.models.utils import build_transformer
 from ..builder import HEADS, build_loss
 from .anchor_free_head import AnchorFreeHead
 
+def inverse_sigmoid(x, eps=1e-5):
+    x = x.clamp(min=0, max=1)
+    x1 = x.clamp(min=eps)
+    x2 = (1 - x).clamp(min=eps)
+    return torch.log(x1/x2)
 
 @HEADS.register_module()
 class ConditionalDETRHead(AnchorFreeHead):
@@ -256,7 +261,7 @@ class ConditionalDETRHead(AnchorFreeHead):
         # position encoding
         pos_embed = self.positional_encoding(masks)  # [bs, embed_dim, h, w]
         # outs_dec: [nb_dec, bs, num_query, embed_dim]
-        outs_dec, _ = self.transformer(x, masks, self.query_embedding.weight,
+        outs_dec, _, reference_points = self.transformer(x, masks, self.query_embedding.weight,
                                        pos_embed)
 
         all_cls_scores = self.fc_cls(outs_dec)

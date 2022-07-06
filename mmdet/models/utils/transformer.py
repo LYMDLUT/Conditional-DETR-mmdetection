@@ -747,7 +747,7 @@ class CTransformer(BaseModule):
             key_padding_mask=mask)
         out_dec = out_dec.transpose(1, 2)
         memory = memory.permute(1, 2, 0).reshape(bs, c, h, w)
-        return out_dec, memory
+        return out_dec, memory,reference_points
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
