@@ -42,11 +42,17 @@ model = dict(
                 d_model=256,
                 transformerlayers=dict(
                     type='CDetrTransformerDecoderLayer',
-                    attn_cfgs=dict(
-                        type='FMultiheadAttention',
+                    attn_cfgs=[
+                        dict(
+                        type='MultiheadAttention',
                         embed_dims=256,
                         num_heads=8,
                         dropout=0.1),
+                        dict(
+                        type='MultiheadAttention',
+                        embed_dims=256,
+                        num_heads=8,
+                        dropout=0.1)],
                     feedforward_channels=2048,
                     ffn_dropout=0.1,
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
