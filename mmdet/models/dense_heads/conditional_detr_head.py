@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import Conv2d, Linear, build_activation_layer
+from mmcv.cnn import Conv2d, Linear, build_activation_layer, bias_init_with_prob
 from mmcv.cnn.bricks.transformer import FFN, build_positional_encoding
 from mmcv.runner import force_fp32
 
@@ -163,11 +163,17 @@ class ConditionalDETRHead(AnchorFreeHead):
             add_residual=False)
         self.fc_reg = Linear(self.embed_dims, 4)
         self.query_embedding = nn.Embedding(self.num_query, self.embed_dims)
+        num_pred = self.transformer.decoder.num_layers
+        self.cls_branches = nn.ModuleList([self.fc_cls for _ in range(num_pred)])
 
     def init_weights(self):
         """Initialize weights of the transformer head."""
         # The initialization for transformer is important
         self.transformer.init_weights()
+        if self.loss_cls.use_sigmoid:
+            bias_init = bias_init_with_prob(0.01)
+            for m in self.cls_branches:
+                nn.init.constant_(m.bias, bias_init)
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
@@ -179,7 +185,7 @@ class ConditionalDETRHead(AnchorFreeHead):
 
         # Names of some parameters in has been changed.
         version = local_metadata.get('version', None)
-        if (version is None or version < 2) and self.__class__ is DETRHead:
+        if (version is None or version < 2) and self.__class__ is ConditionalDETRHead:
             convert_dict = {
                 '.self_attn.': '.attentions.0.',
                 '.ffn.': '.ffns.0.',
