@@ -151,6 +151,7 @@ class ConditionalDETRHead(AnchorFreeHead):
 
     def _init_layers(self):
         """Initialize layers of the transformer head."""
+        fc_cls = Linear(self.embed_dims, self.cls_out_channels)
         self.input_proj = Conv2d(
             self.in_channels, self.embed_dims, kernel_size=1)
         self.fc_cls = Linear(self.embed_dims, self.cls_out_channels)
@@ -164,7 +165,7 @@ class ConditionalDETRHead(AnchorFreeHead):
         self.fc_reg = Linear(self.embed_dims, 4)
         self.query_embedding = nn.Embedding(self.num_query, self.embed_dims)
         num_pred = self.transformer.decoder.num_layers
-        self.cls_branches = nn.ModuleList([self.fc_cls for _ in range(num_pred)])
+        self.cls_branches = nn.ModuleList([fc_cls for _ in range(num_pred)])
 
     def init_weights(self):
         """Initialize weights of the transformer head."""
