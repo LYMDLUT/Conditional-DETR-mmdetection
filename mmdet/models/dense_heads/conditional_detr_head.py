@@ -171,8 +171,7 @@ class ConditionalDETRHead(AnchorFreeHead):
         self.transformer.init_weights()
         if self.loss_cls.use_sigmoid:
             bias_init = bias_init_with_prob(0.01)
-            for m in self.fc_cls:
-                nn.init.constant_(m.bias, bias_init)
+            nn.init.constant_(self.fc_cls.bias, bias_init)
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
