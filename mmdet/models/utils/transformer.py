@@ -593,6 +593,7 @@ class PMultiheadAttention(BaseModule):
         self.ca_kcontent_proj = nn.Linear(embed_dims, embed_dims)
         self.ca_kpos_proj = nn.Linear(embed_dims, embed_dims)
         self.ca_v_proj = nn.Linear(embed_dims, embed_dims)
+        self.ca_qpos_sine_proj = nn.Linear(embed_dims, embed_dims)
         self.cross_attn = MultiheadAttention(embed_dims * 2, num_heads, dropout=attn_drop, vdim=embed_dims)
 
         self.embed_dims = embed_dims
@@ -607,6 +608,8 @@ class PMultiheadAttention(BaseModule):
                             cls_name='MultiheadAttention')
     def forward(self,
                 query,
+                query_sine_embed,
+                is_first,
                 key=None,
                 value=None,
                 identity=None,
@@ -617,25 +620,40 @@ class PMultiheadAttention(BaseModule):
                 **kwargs):
         if identity is None:
             identity = query
-        q_content = self.sa_qcontent_proj(query)
-        query_pos = self.sa_qpos_proj(query_pos)
+        # ========== Begin of Cross-Attention =============
+        # Apply projections here
+        # shape: num_queries x batch_size x 256
+        q_content = self.ca_qcontent_proj(query)
+        k_content = self.ca_kcontent_proj(key)
+        v = self.ca_v_proj(key)
 
-        k_content = self.sa_kcontent_proj(query)
-        k_pos = self.sa_kpos_proj(query_pos)
-        v = self.sa_v_proj(query)
+        num_queries, bs, n_model = q_content.shape
+        hw, _, _ = k_content.shape
 
-        # num_queries, bs, n_model = q_content.shape
-        # hw, _, _ = k_content.shape
+        k_pos = self.ca_kpos_proj(key_pos)
 
-        q = q_content + query_pos
-        k = k_content + key_pos
+        if is_first:
+            q_pos = self.ca_qpos_proj(query_pos)
+            q = q_content + q_pos
+            k = k_content + k_pos
+        else:
+            q = q_content
+            k = k_content
+
+        q = q.view(num_queries, bs, self.num_heads, n_model//self.num_heads)
+        query_sine_embed = self.ca_qpos_sine_proj(query_sine_embed)
+        query_sine_embed = query_sine_embed.view(num_queries, bs, self.num_heads, n_model//self.num_heads)
+        q = torch.cat([q, query_sine_embed], dim=3).view(num_queries, bs, n_model * 2)
+        k = k.view(hw, bs, self.num_heads, n_model//self.num_heads)
+        k_pos = k_pos.view(hw, bs, self.num_heads, n_model//self.num_heads)
+        k = torch.cat([k, k_pos], dim=3).view(hw, bs, n_model * 2)
 
         if self.batch_first:
             q = q.transpose(0, 1)
             k = k.transpose(0, 1)
             v = v.transpose(0, 1)
 
-        out = self.self_attn(
+        out = self.cross_attn(
             query=q,
             key=k,
             value=v,
@@ -648,52 +666,88 @@ class PMultiheadAttention(BaseModule):
         return identity + self.dropout_layer(self.proj_drop(out))
 
 
-############################
-   #      # ========== Begin of Cross-Attention =============
-   #      # Apply projections here
-   #      # shape: num_queries x batch_size x 256
-   #      q_content = self.ca_qcontent_proj(tgt)
-   #      k_content = self.ca_kcontent_proj(memory)
-   #      v = self.ca_v_proj(memory)
-   #
-   #      num_queries, bs, n_model = q_content.shape
-   #      hw, _, _ = k_content.shape
-   #
-   #      k_pos = self.ca_kpos_proj(pos)
-   #
-   #      # For the first decoder layer, we concatenate the positional embedding predicted from
-   #      # the object query (the positional embedding) into the original query (key) in DETR.
-   #      if is_first:
-   #          q_pos = self.ca_qpos_proj(query_pos)
-   #          q = q_content + q_pos
-   #          k = k_content + k_pos
-   #      else:
-   #          q = q_content
-   #          k = k_content
-   #
-   #      q = q.view(num_queries, bs, self.nhead, n_model//self.nhead)
-   #      query_sine_embed = self.ca_qpos_sine_proj(query_sine_embed)
-   #      query_sine_embed = query_sine_embed.view(num_queries, bs, self.nhead, n_model//self.nhead)
-   #      q = torch.cat([q, query_sine_embed], dim=3).view(num_queries, bs, n_model * 2)
-   #      k = k.view(hw, bs, self.nhead, n_model//self.nhead)
-   #      k_pos = k_pos.view(hw, bs, self.nhead, n_model//self.nhead)
-   #      k = torch.cat([k, k_pos], dim=3).view(hw, bs, n_model * 2)
-   #
-   #      tgt2 = self.cross_attn(query=q,
-   #                                 key=k,
-   #                                 value=v, attn_mask=memory_mask,
-   #                                 key_padding_mask=memory_key_padding_mask)[0]
-   #      # ========== End of Cross-Attention =============
-   #
-   #      tgt = tgt + self.dropout2(tgt2)
-   #      tgt = self.norm2(tgt)
-   #      tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
-   #      tgt = tgt + self.dropout3(tgt2)
-   #      tgt = self.norm3(tgt)
-   #      return tgt
-############################
 
+@TRANSFORMER.register_module()
+class CTransformer(BaseModule):
+    """Implements the DETR transformer.
 
+    Following the official DETR implementation, this module copy-paste
+    from torch.nn.Transformer with modifications:
+
+        * positional encodings are passed in MultiheadAttention
+        * extra LN at the end of encoder is removed
+        * decoder returns a stack of activations from all decoding layers
+
+    Args:
+        encoder (`mmcv.ConfigDict` | Dict): Config of
+            TransformerEncoder. Defaults to None.
+        decoder ((`mmcv.ConfigDict` | Dict)): Config of
+            TransformerDecoder. Defaults to None
+        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
+            Defaults to None.
+    """
+
+    def __init__(self, encoder=None, decoder=None, init_cfg=None):
+        super(CTransformer, self).__init__(init_cfg=init_cfg)
+        self.encoder = build_transformer_layer_sequence(encoder)
+        self.decoder = build_transformer_layer_sequence(decoder)
+        self.embed_dims = self.encoder.embed_dims
+
+    def init_weights(self):
+        # follow the official DETR to init parameters
+        for m in self.modules():
+            if hasattr(m, 'weight') and m.weight.dim() > 1:
+                xavier_init(m, distribution='uniform')
+        self._is_init = True
+
+    def forward(self, x, mask, query_embed, pos_embed):
+        """Forward function for `Transformer`.
+
+        Args:
+            x (Tensor): Input query with shape [bs, c, h, w] where
+                c = embed_dims.
+            mask (Tensor): The key_padding_mask used for encoder and decoder,
+                with shape [bs, h, w].
+            query_embed (Tensor): The query embedding for decoder, with shape
+                [num_query, c].
+            pos_embed (Tensor): The positional encoding for encoder and
+                decoder, with the same shape as `x`.
+
+        Returns:
+            tuple[Tensor]: results of decoder containing the following tensor.
+
+                - out_dec: Output from decoder. If return_intermediate_dec \
+                      is True output has shape [num_dec_layers, bs,
+                      num_query, embed_dims], else has shape [1, bs, \
+                      num_query, embed_dims].
+                - memory: Output results from encoder, with shape \
+                      [bs, embed_dims, h, w].
+        """
+        bs, c, h, w = x.shape
+        # use `view` instead of `flatten` for dynamically exporting to ONNX
+        x = x.view(bs, c, -1).permute(2, 0, 1)  # [bs, c, h, w] -> [h*w, bs, c]
+        pos_embed = pos_embed.view(bs, c, -1).permute(2, 0, 1)
+        query_embed = query_embed.unsqueeze(1).repeat(
+            1, bs, 1)  # [num_query, dim] -> [num_query, bs, dim]
+        mask = mask.view(bs, -1)  # [bs, h, w] -> [bs, h*w]
+        memory = self.encoder(
+            query=x,
+            key=None,
+            value=None,
+            query_pos=pos_embed,
+            query_key_padding_mask=mask)
+        target = torch.zeros_like(query_embed)
+        # out_dec: [num_layers, num_query, bs, dim]
+        out_dec,reference_points = self.decoder(
+            query=target,
+            key=memory,
+            value=memory,
+            key_pos=pos_embed,
+            query_pos=query_embed,
+            key_padding_mask=mask)
+        out_dec = out_dec.transpose(1, 2)
+        memory = memory.permute(1, 2, 0).reshape(bs, c, h, w)
+        return out_dec, memory
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
@@ -764,7 +818,7 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
                     intermediate.append(self.post_norm(query))
                 else:
                     intermediate.append(query)
-        return torch.stack(intermediate)
+        return [torch.stack(intermediate), reference_points]
 
 @TRANSFORMER_LAYER.register_module()
 class CDetrTransformerDecoderLayer(BaseTransformerLayer):
@@ -859,10 +913,10 @@ class CDetrTransformerDecoderLayer(BaseTransformerLayer):
 
             elif layer == 'cross_attn':
                 query = self.attentions[attn_index](
-                    query,
-                    key,
-                    value,
-                    identity if self.pre_norm else None,
+                    query=query,
+                    key=key,
+                    value=value,
+                    identity = identity if self.pre_norm else None,
                     query_pos=query_pos,
                     key_pos=key_pos,
                     attn_mask=attn_masks[attn_index],
@@ -928,90 +982,6 @@ class DetrTransformerDecoderLayer(BaseTransformerLayer):
         assert len(operation_order) == 6
         assert set(operation_order) == set(
             ['self_attn', 'norm', 'cross_attn', 'ffn'])
-
-
-@TRANSFORMER.register_module()
-class CTransformer(BaseModule):
-    """Implements the DETR transformer.
-
-    Following the official DETR implementation, this module copy-paste
-    from torch.nn.Transformer with modifications:
-
-        * positional encodings are passed in MultiheadAttention
-        * extra LN at the end of encoder is removed
-        * decoder returns a stack of activations from all decoding layers
-
-    Args:
-        encoder (`mmcv.ConfigDict` | Dict): Config of
-            TransformerEncoder. Defaults to None.
-        decoder ((`mmcv.ConfigDict` | Dict)): Config of
-            TransformerDecoder. Defaults to None
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Defaults to None.
-    """
-
-    def __init__(self, encoder=None, decoder=None, init_cfg=None):
-        super(CTransformer, self).__init__(init_cfg=init_cfg)
-        self.encoder = build_transformer_layer_sequence(encoder)
-        self.decoder = build_transformer_layer_sequence(decoder)
-        self.embed_dims = self.encoder.embed_dims
-
-    def init_weights(self):
-        # follow the official DETR to init parameters
-        for m in self.modules():
-            if hasattr(m, 'weight') and m.weight.dim() > 1:
-                xavier_init(m, distribution='uniform')
-        self._is_init = True
-
-    def forward(self, x, mask, query_embed, pos_embed):
-        """Forward function for `Transformer`.
-
-        Args:
-            x (Tensor): Input query with shape [bs, c, h, w] where
-                c = embed_dims.
-            mask (Tensor): The key_padding_mask used for encoder and decoder,
-                with shape [bs, h, w].
-            query_embed (Tensor): The query embedding for decoder, with shape
-                [num_query, c].
-            pos_embed (Tensor): The positional encoding for encoder and
-                decoder, with the same shape as `x`.
-
-        Returns:
-            tuple[Tensor]: results of decoder containing the following tensor.
-
-                - out_dec: Output from decoder. If return_intermediate_dec \
-                      is True output has shape [num_dec_layers, bs,
-                      num_query, embed_dims], else has shape [1, bs, \
-                      num_query, embed_dims].
-                - memory: Output results from encoder, with shape \
-                      [bs, embed_dims, h, w].
-        """
-        bs, c, h, w = x.shape
-        # use `view` instead of `flatten` for dynamically exporting to ONNX
-        x = x.view(bs, c, -1).permute(2, 0, 1)  # [bs, c, h, w] -> [h*w, bs, c]
-        pos_embed = pos_embed.view(bs, c, -1).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(
-            1, bs, 1)  # [num_query, dim] -> [num_query, bs, dim]
-        mask = mask.view(bs, -1)  # [bs, h, w] -> [bs, h*w]
-        memory = self.encoder(
-            query=x,
-            key=None,
-            value=None,
-            query_pos=pos_embed,
-            query_key_padding_mask=mask)
-        target = torch.zeros_like(query_embed)
-        # out_dec: [num_layers, num_query, bs, dim]
-        out_dec = self.decoder(
-            query=target,
-            key=memory,
-            value=memory,
-            key_pos=pos_embed,
-            query_pos=query_embed,
-            key_padding_mask=mask)
-        out_dec = out_dec.transpose(1, 2)
-        memory = memory.permute(1, 2, 0).reshape(bs, c, h, w)
-        return out_dec, memory
-
 
 
 
