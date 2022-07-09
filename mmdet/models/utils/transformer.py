@@ -489,7 +489,7 @@ class FMultiheadAttention(BaseModule):
         self.sa_kcontent_proj = nn.Linear(embed_dims, embed_dims)
         self.sa_kpos_proj = nn.Linear(embed_dims, embed_dims)
         self.sa_v_proj = nn.Linear(embed_dims, embed_dims)
-        self.self_attn = MultiheadAttention(embed_dims, num_heads, dropout=attn_drop, vdim=embed_dims)
+        self.self_attn = MultiheadAttention(embed_dims, num_heads, attn_drop, vdim=embed_dims,**kwargs)
 
         self.embed_dims = embed_dims
         self.num_heads = num_heads
@@ -594,7 +594,7 @@ class PMultiheadAttention(BaseModule):
         self.ca_kpos_proj = nn.Linear(embed_dims, embed_dims)
         self.ca_v_proj = nn.Linear(embed_dims, embed_dims)
         self.ca_qpos_sine_proj = nn.Linear(embed_dims, embed_dims)
-        self.cross_attn = MultiheadAttention(embed_dims * 2, num_heads, dropout=attn_drop, vdim=embed_dims)
+        self.cross_attn = MultiheadAttention(embed_dims * 2, num_heads, attn_drop, vdim=embed_dims,**kwargs)
 
         self.embed_dims = embed_dims
         self.num_heads = num_heads
@@ -608,8 +608,6 @@ class PMultiheadAttention(BaseModule):
                             cls_name='MultiheadAttention')
     def forward(self,
                 query,
-                query_sine_embed,
-                is_first,
                 key=None,
                 value=None,
                 identity=None,
@@ -617,6 +615,8 @@ class PMultiheadAttention(BaseModule):
                 key_pos=None,
                 attn_mask=None,
                 key_padding_mask=None,
+                query_sine_embed=None,
+                is_first=None,
                 **kwargs):
         if identity is None:
             identity = query
@@ -812,13 +812,14 @@ class CDetrTransformerDecoder(TransformerLayerSequence):
             # apply transformation
             query_sine_embed = query_sine_embed * pos_transformation
 
+            #query = layer(query,  *args, **kwargs)
             query = layer(query, query_sine_embed,is_first=(layer_id == 0), *args, **kwargs)
             if self.return_intermediate:
                 if self.post_norm is not None:
                     intermediate.append(self.post_norm(query))
                 else:
                     intermediate.append(query)
-        return [torch.stack(intermediate), reference_points]
+        return torch.stack(intermediate), reference_points
 
 @TRANSFORMER_LAYER.register_module()
 class CDetrTransformerDecoderLayer(BaseTransformerLayer):

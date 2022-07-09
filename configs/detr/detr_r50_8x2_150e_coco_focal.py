@@ -15,6 +15,7 @@ model = dict(
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     bbox_head=dict(
         type='DETRHead',
+        num_query=100,
         num_classes=80,
         in_channels=2048,
         transformer=dict(
@@ -40,11 +41,15 @@ model = dict(
                 num_layers=6,
                 transformerlayers=dict(
                     type='DetrTransformerDecoderLayer',
-                    attn_cfgs=dict(
-                        type='MultiheadAttention',
+                    attn_cfgs=[
+                        dict(type='MultiheadAttention',
                         embed_dims=256,
                         num_heads=8,
                         dropout=0.1),
+                        dict(type='MultiheadAttention',
+                             embed_dims=256,
+                             num_heads=8,
+                             dropout=0.1)],
                     feedforward_channels=2048,
                     ffn_dropout=0.1,
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
@@ -52,19 +57,26 @@ model = dict(
             )),
         positional_encoding=dict(
             type='SinePositionalEncoding', num_feats=128, normalize=True),
+        # loss_cls=dict(
+        #     type='CrossEntropyLoss',
+        #     bg_cls_weight=0.1,
+        #     use_sigmoid=False,
+        #     loss_weight=1.0,
+        #     class_weight=1.0),
         loss_cls=dict(
-            type='CrossEntropyLoss',
-            bg_cls_weight=0.1,
-            use_sigmoid=False,
-            loss_weight=1.0,
-            class_weight=1.0),
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         loss_iou=dict(type='GIoULoss', loss_weight=2.0)),
     # training and testing settings
     train_cfg=dict(
         assigner=dict(
             type='HungarianAssigner',
-            cls_cost=dict(type='ClassificationCost', weight=1.),
+            #cls_cost=dict(type='ClassificationCost', weight=1.),
+            cls_cost=dict(type='FocalLossCost', weight=2.0),
             reg_cost=dict(type='BBoxL1Cost', weight=5.0, box_format='xywh'),
             iou_cost=dict(type='IoUCost', iou_mode='giou', weight=2.0))),
     test_cfg=dict(max_per_img=100))
@@ -132,7 +144,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=1,
+    samples_per_gpu=2,
     workers_per_gpu=2,
     train=dict(pipeline=train_pipeline),
     val=dict(pipeline=test_pipeline),
